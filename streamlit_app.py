@@ -1,8 +1,10 @@
 import streamlit as st
 import pandas as pd
-import math
 from pathlib import Path
-
+from google.cloud import bigquery
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 # Set the title and favicon that appear in the Browser's tab bar.
 st.set_page_config(
     page_title='GDP dashboard',
@@ -11,141 +13,47 @@ st.set_page_config(
 
 # -----------------------------------------------------------------------------
 # Declare some useful functions.
+client = bigquery.Client()
 
 @st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
-
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
+def load_data():
+    query = """
+    SELECT Final_Incident_Category, Priority, Dispatched_Time, Unit_On_Scene_TimeStamp
+    FROM `sound-essence-442801-t6.cmpe_255_hw1_san_jose_fires.processed_fire_results`
     """
+    query_job = client.query(query)
+    df = query_job.to_dataframe()
+    return df
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+st.title("San Jose Fire Incident Data Analysis")
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+# Load the data
+df = load_data()
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+# Question 1: Distribution of Incident Types
+st.header("Distribution of Incident Types")
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+incident_counts = df['Final_Incident_Category'].value_counts()
 
-    return gdp_df
+fig, ax = plt.subplots(figsize=(12, 6))
+incident_counts.plot(kind='bar', ax=ax)
+plt.title('Distribution of Incident Types')
+plt.xlabel('Incident Category')
+plt.ylabel('Count')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
 
-gdp_df = get_gdp_data()
+st.pyplot(fig)
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+# Question 2: Response Times by Priority
+st.header("Response Times by Priority")
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+df['Response_Time'] = (pd.to_datetime(df['Unit_On_Scene_TimeStamp']) - pd.to_datetime(df['Dispatched_Time'])).dt.total_seconds() / 60
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+fig, ax = plt.subplots(figsize=(10, 6))
+sns.boxplot(x='Priority', y='Response_Time', data=df, ax=ax)
+plt.title('Response Time by Priority')
+plt.xlabel('Priority')
+plt.ylabel('Response Time (minutes)')
 
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+st.pyplot(fig)
